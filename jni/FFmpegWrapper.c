@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013, David Brodsky. All rights reserved.
- * Copyright (c) 2015, Konstantin Kuzov. All rights reserved.
+ * Copyright (c) 2016, Konstantin Kuzov. All rights reserved.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -78,6 +78,7 @@ void ffmpeg_init() {
     avcodec_register_all();
 
 #ifdef FFMPEG_LOGGING
+    av_log_set_level(AV_LOG_VERBOSE);
     av_log_set_callback(log_callback);
 #endif
 
@@ -131,27 +132,21 @@ int addVideoStream(AVFormatContext *dest, uint8_t *extradata, size_t extradata_s
     }
 
     if (extradata_size > 0) {
+        LOGI("video extradata size: %d\n", (int)extradata_size);
         c->extradata_size = extradata_size;
         c->extradata = av_malloc(c->extradata_size);
         memcpy(c->extradata, extradata, c->extradata_size);
     }
 
     /* Resolution must be a multiple of two. */
-    c->width    = VIDEO_WIDTH;
-    c->height   = VIDEO_HEIGHT;
+    c->width = VIDEO_WIDTH;
+    c->height = VIDEO_HEIGHT;
 
-    /* timebase: This is the fundamental unit of time (in seconds) in terms
-     * of which frame timestamps are represented. For fixed-fps content,
-     * timebase should be 1/framerate and timestamp increments should be
-     * identical to 1. */
-    c->time_base.den = 30;
-    c->time_base.num = 1;
-    c->pix_fmt       = VIDEO_PIX_FMT;
-//    c->profile       = FF_PROFILE_H264_BASELINE;
+    c->pix_fmt = VIDEO_PIX_FMT;
 
     /* Some formats want stream headers to be separate. */
     if (dest->oformat->flags & AVFMT_GLOBALHEADER)
-	c->flags |= CODEC_FLAG_GLOBAL_HEADER;
+        c->flags |= CODEC_FLAG_GLOBAL_HEADER;
 
     return 0;
 }
@@ -167,7 +162,7 @@ int addAudioStream(AVFormatContext *formatContext, uint8_t *extradata, size_t ex
      * TODO: make possible using software encoder by request */
     codec = avcodec_find_encoder(AUDIO_CODEC_ID);
     if (!codec) {
-        LOGE("add_audio_stream codec not found");
+        LOGI("add_audio_stream codec not found");
     }
 
     st = avformat_new_stream(formatContext, codec);
@@ -184,12 +179,12 @@ int addAudioStream(AVFormatContext *formatContext, uint8_t *extradata, size_t ex
 
     if (!codec) {
         c->codec_id = AUDIO_CODEC_ID;
-	c->codec_type = AVMEDIA_TYPE_AUDIO;
+        c->codec_type = AVMEDIA_TYPE_AUDIO;
     }
 
     if (extradata_size > 0)
     {
-        LOGI("extradata size: %d\n", extradata_size);
+        LOGI("audio extradata size: %d\n", (int)extradata_size);
         c->extradata_size = extradata_size;
         c->extradata = av_malloc(c->extradata_size);
         memcpy(c->extradata, extradata, c->extradata_size);
@@ -197,16 +192,15 @@ int addAudioStream(AVFormatContext *formatContext, uint8_t *extradata, size_t ex
 
     c->strict_std_compliance = FF_COMPLIANCE_UNOFFICIAL; // for native aac support
 
-    c->sample_fmt  = AUDIO_SAMPLE_FMT;
-    c->time_base.den = 30;
-    c->time_base.num = 1;
-
+    c->sample_fmt = AUDIO_SAMPLE_FMT;
     c->sample_rate = AUDIO_SAMPLE_RATE;
-    c->channels    = AUDIO_CHANNELS;
+    c->channels = AUDIO_CHANNELS;
 
     // some formats want stream headers to be separate
     if (formatContext->oformat->flags & AVFMT_GLOBALHEADER)
         c->flags |= CODEC_FLAG_GLOBAL_HEADER;
+
+    return 0;
 }
 
 int openFileForWriting(AVFormatContext *avfc, const char *path) {
@@ -219,8 +213,11 @@ int openFileForWriting(AVFormatContext *avfc, const char *path) {
 }
 
 int writeFileHeader(AVFormatContext *avfc) {
+    AVDictionary *dict = NULL;
+
     // Write header for output file
-    int writeHeaderResult = avformat_write_header(avfc, NULL);
+
+    int writeHeaderResult = avformat_write_header(avfc, &dict);
     if (writeHeaderResult < 0)
         LOGE("Error writing header: %s", stringForAVErrorNumber(writeHeaderResult));
 
@@ -245,7 +242,7 @@ int writeFileTrailer(AVFormatContext *avfc) {
  * Prepares an AVFormatContext for output.
  * Currently, the output format and codecs are hardcoded in this file.
  */
-int Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_prepareAVFormatContext(JNIEnv *env, jobject obj, jstring jOutputPath, jobject jVideoData, jint jVideoSize, jobject jAudioData, jint jAudioSize) {
+int Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_prepareAVFormatContext(JNIEnv *env, jobject obj, jstring jOutputPath, jobject jVideoData, jint jVideoSize, jobject jAudioData, jint jAudioSize, jlong jMaxInterleaveDelta) {
     int result = 0;
 
     ffmpeg_init();
@@ -255,7 +252,6 @@ int Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_prepareAVFormatContext(JNIEnv
     sourceTimeBase->num = 1;
     sourceTimeBase->den = 1000000;
 
-    AVFormatContext *inputFormatContext;
     outputPath = (*env)->GetStringUTFChars(env, jOutputPath, NULL);
 
     result = avformat_alloc_output_context2(&outputFormatContext, NULL, outputFormatName, outputPath);
@@ -280,6 +276,8 @@ int Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_prepareAVFormatContext(JNIEnv
 
     if (strcmp(outputFormatName, "hls") == 0)
         av_opt_set_int(outputFormatContext->priv_data, "hls_time", hlsSegmentDurationSec, 0);
+
+    outputFormatContext->max_interleave_delta = (uint64_t) jMaxInterleaveDelta;
 
     result = openFileForWriting(outputFormatContext, outputPath);
     if(result < 0) {
@@ -327,7 +325,7 @@ void Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_setAVOptions(JNIEnv *env, jo
  * Consruct an AVPacket from MediaCodec output and call
  * av_interleaved_write_frame with our AVFormatContext
  */
-int Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_writeAVPacketFromEncodedData(JNIEnv *env, jobject obj, jobject jData, jint jIsVideo, jint jSize, jint jFlags, jlong jPts) {
+int Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_writeAVPacketFromEncodedData(JNIEnv *env, jobject obj, jobject jData, jint jIsVideo, jint jSize, jint jFlags, jlong jPts, jint jIsInterleave) {
     // Ignore data if avstream is not initialized
     if ((((int) jIsVideo) == JNI_TRUE && videoStreamIndex == -1) || (((int) jIsVideo) != JNI_TRUE && audioStreamIndex == -1))
         return;
@@ -366,7 +364,13 @@ int Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_writeAVPacketFromEncodedData(
 
     packet->pts = av_rescale_q(packet->pts, *sourceTimeBase, (outputFormatContext->streams[packet->stream_index]->time_base));
 
-    int writeFrameResult = av_interleaved_write_frame(outputFormatContext, packet);
+    int writeFrameResult;
+
+    if ( ((int) jIsInterleave) == JNI_TRUE)
+        writeFrameResult = av_interleaved_write_frame(outputFormatContext, packet);
+    else
+        writeFrameResult = av_write_frame(outputFormatContext, packet);
+
     if(writeFrameResult < 0) {
         LOGE("av_interleaved_write_frame video: %d size: %d error: %s", ((int) jIsVideo), ((int) jSize), stringForAVErrorNumber(writeFrameResult));
     }

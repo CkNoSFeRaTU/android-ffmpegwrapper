@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2013, David Brodsky. All rights reserved.
+ *	Copyright (c) 2013, David Brodsky. All rights reserved.
+ *	Copyright (c) 2016, Konstantin Kuzov. All rights reserved.
  *
  *	This program is free software: you can redistribute it and/or modify
  *	it under the terms of the GNU General Public License as published by
@@ -44,8 +45,8 @@ public class FFmpegWrapper {
     }
 
     public native void setAVOptions(AVOptions jOpts);
-    public native int prepareAVFormatContext(String jOutputPath, ByteBuffer jVideoData, int jVideoSize, ByteBuffer jAudioData, int jAudioSize);
-    public native int writeAVPacketFromEncodedData(ByteBuffer jData, int jIsVideo, int jSize, int jFlags, long jPts);
+    public native int prepareAVFormatContext(String jOutputPath, ByteBuffer jVideoData, int jVideoSize, ByteBuffer jAudioData, int jAudioSize, long jMaxInterleaveDelta);
+    public native int writeAVPacketFromEncodedData(ByteBuffer jData, int jIsVideo, int jSize, int jFlags, long jPts, int jIsInterleave);
     public native void finalizeAVFormatContext();
 
     /**
