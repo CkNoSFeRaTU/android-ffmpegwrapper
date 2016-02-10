@@ -2,7 +2,7 @@
 
 TOOLCHAIN_ARCH=linux-x86_64
 ALL_ARCHS="armeabi-v7a x86 arm64-v8a"
-FF_VER="2.8.4"
+FF_VER="2.8.6"
 
 export NDK=/home/nosferatu/Work/adt-bundle-linux/android-ndk-r10e
 

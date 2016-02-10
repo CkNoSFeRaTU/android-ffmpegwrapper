@@ -1,3 +1,5 @@
-jni/ffmpeg/*
-jni/include/*
+jni/android/*
+jni/ffmpeg-*
+libs/*
+obj/*
 /build
