@@ -56,10 +56,10 @@ int AUDIO_SAMPLE_FMT = AV_SAMPLE_FMT_S16;
 int AUDIO_SAMPLE_RATE = 44100;
 int AUDIO_CHANNELS = 1;
 
-AVFormatContext *outputFormatContext = NULL;
-AVRational *sourceTimeBase = NULL;
+int64_t VIDEO_FIRST_PTS = AV_NOPTS_VALUE;
+int64_t AUDIO_FIRST_PTS = AV_NOPTS_VALUE;
 
-AVPacket *packet = NULL; // recycled across calls to writeAVPacketFromEncodedData
+AVFormatContext *outputFormatContext = NULL;
 
 int IS_RUNNING = 0;
 
@@ -247,11 +247,6 @@ int Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_prepareAVFormatContext(JNIEnv
 
     ffmpeg_init();
 
-    // Create AVRational that expects timestamps in microseconds
-    sourceTimeBase = av_malloc(sizeof(AVRational));
-    sourceTimeBase->num = 1;
-    sourceTimeBase->den = 1000000;
-
     outputPath = (*env)->GetStringUTFChars(env, jOutputPath, NULL);
 
     result = avformat_alloc_output_context2(&outputFormatContext, NULL, outputFormatName, outputPath);
@@ -326,14 +321,14 @@ void Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_setAVOptions(JNIEnv *env, jo
  * av_interleaved_write_frame with our AVFormatContext
  */
 int Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_writeAVPacketFromEncodedData(JNIEnv *env, jobject obj, jobject jData, jint jIsVideo, jint jSize, jint jFlags, jlong jPts, jint jIsInterleave) {
+    AVPacket *packet = NULL;
+
     // Ignore data if avstream is not initialized
     if ((((int) jIsVideo) == JNI_TRUE && videoStreamIndex == -1) || (((int) jIsVideo) != JNI_TRUE && audioStreamIndex == -1))
         return;
 
-    if(packet == NULL) {
+    if(packet == NULL)
         packet = av_malloc(sizeof(AVPacket));
-        LOGI("av_malloc packet");
-    }
 
     // jData is a ByteBuffer managed by Android's MediaCodec.
     // Because the audo track of the resulting output mostly works, I'm inclined to rule out this data marshaling being an issue
@@ -349,20 +344,34 @@ int Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_writeAVPacketFromEncodedData(
 
     av_init_packet(packet);
 
+    int64_t curr_pts = (int64_t) jPts;
+
     if ( ((int) jIsVideo) == JNI_TRUE) {
         packet->stream_index = videoStreamIndex;
+        if (VIDEO_FIRST_PTS == AV_NOPTS_VALUE && curr_pts == 0)
+        {
+            av_free_packet(packet);
+            return;
+        }
+        else if (VIDEO_FIRST_PTS == AV_NOPTS_VALUE)
+            VIDEO_FIRST_PTS = curr_pts;
+        packet->pts = curr_pts - VIDEO_FIRST_PTS;
     } else {
         packet->stream_index = audioStreamIndex;
+        curr_pts = curr_pts / AUDIO_CHANNELS;
+        if (AUDIO_FIRST_PTS == AV_NOPTS_VALUE)
+            AUDIO_FIRST_PTS = curr_pts;
+        packet->pts = curr_pts - AUDIO_FIRST_PTS;
     }
 
     packet->size = (int) jSize;
     packet->data = data;
-    packet->pts = (uint64_t) jPts;
+    packet->dts = AV_NOPTS_VALUE;
 
     if (((int) jIsVideo) == JNI_TRUE && jFlags & 1 > 0)
         packet->flags |= AV_PKT_FLAG_KEY;
 
-    packet->pts = av_rescale_q(packet->pts, *sourceTimeBase, (outputFormatContext->streams[packet->stream_index]->time_base));
+    packet->pts = av_rescale_q(packet->pts, AV_TIME_BASE_Q, outputFormatContext->streams[packet->stream_index]->time_base);
 
     int writeFrameResult;
 
@@ -376,6 +385,7 @@ int Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_writeAVPacketFromEncodedData(
     }
 
     av_free_packet(packet);
+
     return writeFrameResult;
 }
 
@@ -399,6 +409,9 @@ void Java_net_openwatch_ffmpegwrapper_FFmpegWrapper_finalizeAVFormatContext(JNIE
 
     audioStreamIndex = -1;
     videoStreamIndex = -1;
+    
+    VIDEO_FIRST_PTS = AV_NOPTS_VALUE;
+    AUDIO_FIRST_PTS = AV_NOPTS_VALUE;
     
     IS_RUNNING = 0;
 }
